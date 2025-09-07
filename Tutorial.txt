@@ -1,0 +1,141 @@
+Tutorial Completo: Btrfs e Scripts btrfs-snap / btrfs-snap-auto
+
+\============================
+
+1. Introdução ao Btrfs
+   \============================
+
+Btrfs (B-tree file system) é um sistema de arquivos moderno no Linux com recursos avançados:
+
+* Snapshots: cópias instantâneas do sistema ou subvolumes.
+* Subvolumes: partições lógicas dentro do filesystem.
+* Compressão e desduplicação de dados.
+* RAID nativo e checksums para integridade.
+
+Pré-requisitos:
+
+* Sistema Linux com Btrfs.
+* Pacote btrfs-progs instalado:
+
+  * Arch Linux: sudo pacman -S btrfs-progs
+  * Debian/Ubuntu: sudo apt install btrfs-progs
+
+\============================
+2\. Estrutura recomendada
+=========================
+
+Exemplo:
+/
+├─ @                (subvolume raiz)
+├─ .snapshots/       (diretório para snapshots)
+└─ boot/loader/entries/ (para systemd-boot)
+
+\============================
+3\. Script btrfs-snap
+=====================
+
+O script btrfs-snap gerencia snapshots:
+
+* create NOME: cria snapshot
+* restore NOME: restaura snapshot como raiz
+* boot NOME: adiciona snapshot no boot (systemd-boot ou GRUB)
+* list: lista snapshots
+* delete NOME: deleta snapshot com confirmação
+* cleanup N: mantém apenas os últimos N snapshots
+
+### Instalação:
+
+1. Salvar em /usr/local/bin/btrfs-snap
+2. Tornar executável:
+   sudo chmod +x /usr/local/bin/btrfs-snap
+
+### Exemplos de uso:
+
+* Criar snapshot:
+  sudo btrfs-snap create antes-do-update
+* Restaurar snapshot:
+  sudo btrfs-snap restore antes-do-update
+* Adicionar snapshot no boot:
+  sudo btrfs-snap boot antes-do-update
+* Listar snapshots:
+  sudo btrfs-snap list
+* Deletar snapshot:
+  sudo btrfs-snap delete antes-do-update
+* Limpar mantendo apenas 5 snapshots:
+  sudo btrfs-snap cleanup 5
+
+\============================
+4\. Script btrfs-snap-auto
+==========================
+
+O btrfs-snap-auto cria snapshots automáticos antes de atualizações, adiciona ao boot e mantém limite de snapshots.
+
+### Instalação:
+
+1. Salvar em /usr/local/bin/btrfs-snap-auto
+2. Tornar executável:
+   sudo chmod +x /usr/local/bin/btrfs-snap-auto
+
+### Uso manual:
+
+* Rodar antes da atualização:
+  sudo btrfs-snap-auto update
+
+\============================
+5\. Execução automática com systemd
+===================================
+
+### Serviço systemd:
+
+Arquivo: /etc/systemd/system/btrfs-snap-auto.service
+
+```
+[Unit]
+Description=Snapshot automático Btrfs antes de atualizar o sistema
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/btrfs-snap-auto update
+```
+
+### Timer systemd:
+
+Arquivo: /etc/systemd/system/btrfs-snap-auto.timer
+
+```
+[Unit]
+Description=Executa btrfs-snap-auto periodicamente antes da atualização
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+### Ativar timer:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl enable --now btrfs-snap-auto.timer
+sudo systemctl start btrfs-snap-auto.timer
+```
+
+### Uso com cron (sem systemd):
+
+```
+sudo crontab -e
+0 3 * * * /usr/local/bin/btrfs-snap-auto update
+```
+
+\============================
+6\. Benefícios
+==============
+
+* Snapshots automáticos antes de atualizações.
+* Entradas de boot criadas automaticamente (systemd-boot ou GRUB).
+* Limite de snapshots antigos mantido.
+* Permite restauração rápida do sistema em caso de falhas.
