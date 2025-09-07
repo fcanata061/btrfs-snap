@@ -1,0 +1,95 @@
+#!/bin/bash
+#
+# btrfs-snap-auto: snapshot automático antes de atualizações
+#
+# Uso: sudo btrfs-snap-auto update
+# Gera snapshot, adiciona no boot e mantém últimos N snapshots.
+#
+
+# --- CONFIGURAÇÃO ---
+DISK="/dev/nvme0n1p2"          # partição raiz
+ROOT="@"
+SNAPDIR="/.snapshots"
+ROOTMNT="/mnt"
+SYSTEMD_ENTRYDIR="/boot/loader/entries"
+KEEP_LAST=5                     # quantos snapshots manter
+UUID=$(blkid -s UUID -o value "$DISK")
+DATE=$(date +%Y-%m-%d_%H-%M)
+
+# --- FUNÇÕES ---
+
+log() { echo -e "📌 $1"; }
+
+create_snapshot() {
+    mkdir -p "$SNAPDIR"
+    btrfs subvolume snapshot -r "/$ROOT" "$SNAPDIR/@_$DATE"
+    log "✅ Snapshot criado: $SNAPDIR/@_$DATE"
+}
+
+boot_entry_systemd() {
+    local ENTRYFILE="$SYSTEMD_ENTRYDIR/snapshot-$DATE.conf"
+    cat > "$ENTRYFILE" <<EOF
+title   Linux (snapshot $DATE)
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options root=UUID=$UUID rootflags=subvol=@_$DATE rw
+EOF
+    log "✅ Entrada systemd-boot criada: $ENTRYFILE"
+    bootctl update
+}
+
+boot_entry_grub() {
+    local CUSTOMFILE="/etc/grub.d/40_custom"
+    cat >> "$CUSTOMFILE" <<EOF
+
+menuentry "Linux (snapshot $DATE)" {
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $UUID
+    linux /vmlinuz-linux root=UUID=$UUID rootflags=subvol=@_$DATE rw
+    initrd /initramfs-linux.img
+}
+EOF
+    log "✅ Entrada GRUB adicionada em $CUSTOMFILE"
+    grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+boot_entry() {
+    if command -v bootctl >/dev/null; then
+        boot_entry_systemd
+    elif command -v grub-mkconfig >/dev/null; then
+        boot_entry_grub
+    else
+        log "❌ Nenhum bootloader compatível detectado"
+        exit 1
+    fi
+}
+
+cleanup_snapshots() {
+    mkdir -p "$SNAPDIR"
+    SNAPLIST=( $(ls -1tr "$SNAPDIR") )
+    NUMSNAPS=${#SNAPLIST[@]}
+    if (( NUMSNAPS <= KEEP_LAST )); then
+        log "✅ Snapshots dentro do limite ($NUMSNAPS <= $KEEP_LAST)"
+        return
+    fi
+    NUMDEL=$(( NUMSNAPS - KEEP_LAST ))
+    log "⚠️  Deletando $NUMDEL snapshots mais antigos..."
+    for (( i=0; i<NUMDEL; i++ )); do
+        btrfs subvolume delete "$SNAPDIR/${SNAPLIST[$i]}"
+        log "   ✅ Deletado: ${SNAPLIST[$i]}"
+    done
+    log "✅ Limpeza concluída. Mantidos últimos $KEEP_LAST snapshots."
+}
+
+# --- MAIN ---
+CMD=$1
+if [ "$CMD" != "update" ]; then
+    echo "Uso: $0 update"
+    exit 1
+fi
+
+log "⏱ Criando snapshot automático antes da atualização..."
+create_snapshot
+boot_entry
+cleanup_snapshots
+log "🎉 Snapshot pronto! Pode atualizar o sistema com segurança."
