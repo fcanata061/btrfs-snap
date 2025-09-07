@@ -1,0 +1,130 @@
+TUTORIAL COMPLETO: ARCH LINUX COM BTRFS, SUBVOLUMES E SNAPSHOTS
+================================================================
+
+1. PREPARAÇÃO
+-------------
+- Inicialize pelo Live USB do Arch Linux.
+- Conecte à internet:
+  ping archlinux.org
+
+2. PARTICIONAMENTO DO DISCO
+---------------------------
+Supondo disco /dev/sda:
+
+# Criar GPT
+sudo parted /dev/sda mklabel gpt
+
+# Criar /boot (ext4, 512MB)
+sudo parted -a optimal /dev/sda mkpart primary 1MiB 513MiB
+sudo mkfs.ext4 /dev/sda1
+
+# Criar Btrfs (restante do disco)
+sudo parted -a optimal /dev/sda mkpart primary 513MiB 100%
+sudo mkfs.btrfs /dev/sda2
+
+3. CRIANDO SUBVOLUMES
+---------------------
+# Montar Btrfs
+sudo mount /dev/sda2 /mnt
+
+# Criar subvolumes
+sudo btrfs subvolume create /mnt/@        # Sistema raiz
+sudo btrfs subvolume create /mnt/@home    # Home
+sudo btrfs subvolume create /mnt/@snapshots # Snapshots
+sudo btrfs subvolume create /mnt/@var     # Logs e /var (opcional)
+
+# Desmontar
+sudo umount /mnt
+
+4. MONTANDO SUBVOLUMES
+----------------------
+sudo mount -o subvol=@,compress=zstd,ssd,space_cache=v2 /dev/sda2 /mnt
+sudo mkdir /mnt/{boot,home,.snapshots,var}
+sudo mount -o subvol=@home,compress=zstd,ssd,space_cache=v2 /dev/sda2 /mnt/home
+sudo mount -o subvol=@snapshots,compress=zstd /dev/sda2 /mnt/.snapshots
+sudo mount -o subvol=@var,compress=zstd /dev/sda2 /mnt/var
+sudo mount /dev/sda1 /mnt/boot
+
+5. INSTALAÇÃO BASE
+-----------------
+sudo pacstrap /mnt base linux linux-firmware vim btrfs-progs
+
+6. CONFIGURAÇÃO DO SISTEMA
+--------------------------
+sudo genfstab -U /mnt >> /mnt/etc/fstab
+sudo arch-chroot /mnt
+
+# Timezone
+ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
+hwclock --systohc
+
+# Locale
+echo "pt_BR.UTF-8 UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=pt_BR.UTF-8" > /etc/locale.conf
+
+# Hostname
+echo "arch-btrfs" > /etc/hostname
+
+7. FSTAB EXEMPLO
+----------------
+/dev/sda2  /          btrfs  subvol=@,compress=zstd,ssd,space_cache=v2 0 1
+/dev/sda2  /home      btrfs  subvol=@home,compress=zstd,ssd,space_cache=v2 0 2
+/dev/sda2  /.snapshots btrfs subvol=@snapshots,compress=zstd 0 2
+/dev/sda2  /var       btrfs  subvol=@var,compress=zstd 0 2
+/dev/sda1  /boot      ext4   defaults 0 2
+
+8. BOOTLOADER (GRUB UEFI)
+-------------------------
+sudo pacman -S grub efibootmgr
+mkdir /boot/EFI
+mount /dev/sda1 /boot/EFI
+grub-install --target=x86_64-efi --efi-directory=/boot/EFI --bootloader-id=GRUB
+grub-mkconfig -o /boot/grub/grub.cfg
+
+9. CRIANDO SNAPSHOTS
+--------------------
+# Snapshot do sistema
+sudo btrfs subvolume snapshot / /mnt/.snapshots/root_2025-09-07
+
+# Snapshot do home
+sudo btrfs subvolume snapshot /home /mnt/.snapshots/home_2025-09-07
+
+10. RESTAURANDO SNAPSHOTS
+-------------------------
+# Renomear subvolume atual
+sudo mv /@ /@_old
+sudo mv /@home /@home_old
+
+# Renomear snapshots para subvolumes ativos
+sudo mv /.snapshots/root_2025-09-07 /@
+sudo mv /.snapshots/home_2025-09-07 /@home
+
+# Reinicie o sistema
+
+11. DICAS IMPORTANTES
+---------------------
+- Crie snapshots antes de atualizações importantes.
+- Mantenha apenas snapshots necessários para economizar espaço.
+- Use compressão zstd para balancear performance e economia de disco.
+- RAID 5/6 em Btrfs ainda é experimental.
+
+12. COMANDOS ÚTEIS
+------------------
+# Listar subvolumes
+btrfs subvolume list /
+
+# Criar snapshot
+btrfs subvolume snapshot <origem> <destino>
+
+# Restaurar snapshot
+mv <snapshot> <subvolume>
+
+# Checar integridade
+btrfs scrub start /
+btrfs scrub status /
+
+# Defragmentar e aplicar compressão
+btrfs filesystem defragment -r -v -czstd /
+
+Fim do tutorial.
