@@ -1,0 +1,169 @@
+#!/bin/bash
+#
+# btrfs-snap: gerenciador de snapshots Btrfs + boot entries
+#
+# Uso:
+#   sudo btrfs-snap create NOME
+#   sudo btrfs-snap restore NOME
+#   sudo btrfs-snap boot NOME
+#   sudo btrfs-snap list
+#   sudo btrfs-snap delete NOME
+#   sudo btrfs-snap cleanup N
+#
+
+# --- CONFIG (ajuste conforme seu sistema) ---
+DISK="/dev/nvme0n1p2"     # partição raiz
+ROOT="@"
+SNAPDIR="/.snapshots"
+ROOTMNT="/mnt"
+SYSTEMD_ENTRYDIR="/boot/loader/entries"
+UUID=$(blkid -s UUID -o value "$DISK")
+
+# --- FUNÇÕES ---
+
+usage() {
+    echo "Uso: $0 {create|restore|boot|list|delete|cleanup} [ARG]"
+    echo "  create NOME   - cria snapshot"
+    echo "  restore NOME  - restaura snapshot como raiz"
+    echo "  boot NOME     - adiciona snapshot ao boot (systemd-boot ou GRUB)"
+    echo "  list          - lista snapshots existentes"
+    echo "  delete NOME   - deleta snapshot (com confirmação)"
+    echo "  cleanup N     - mantém apenas os últimos N snapshots"
+    exit 1
+}
+
+create_snapshot() {
+    local NAME=$1
+    mkdir -p "$SNAPDIR"
+    btrfs subvolume snapshot -r "/$ROOT" "$SNAPDIR/@_${NAME}"
+    echo "✅ Snapshot criado: $SNAPDIR/@_${NAME}"
+}
+
+restore_snapshot() {
+    local NAME=$1
+    mount -o subvolid=5 "$DISK" "$ROOTMNT" || exit 1
+    if [ -d "$ROOTMNT/@/" ]; then
+        echo "🔄 Apagando subvolume atual @..."
+        btrfs subvolume delete "$ROOTMNT/@"
+    fi
+    btrfs subvolume snapshot "$ROOTMNT$SNAPDIR/@_${NAME}" "$ROOTMNT/@"
+    echo "✅ Snapshot restaurado como raiz (@)"
+}
+
+boot_entry_systemd() {
+    local NAME=$1
+    local ENTRYFILE="$SYSTEMD_ENTRYDIR/snapshot-${NAME}.conf"
+
+    cat > "$ENTRYFILE" <<EOF
+title   Linux (snapshot $NAME)
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options root=UUID=$UUID rootflags=subvol=@_${NAME} rw
+EOF
+
+    echo "✅ Entrada systemd-boot criada: $ENTRYFILE"
+    bootctl update
+}
+
+boot_entry_grub() {
+    local NAME=$1
+    local CUSTOMFILE="/etc/grub.d/40_custom"
+
+    cat >> "$CUSTOMFILE" <<EOF
+
+menuentry "Linux (snapshot $NAME)" {
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $UUID
+    linux /vmlinuz-linux root=UUID=$UUID rootflags=subvol=@_${NAME} rw
+    initrd /initramfs-linux.img
+}
+EOF
+
+    echo "✅ Entrada GRUB adicionada em $CUSTOMFILE"
+    echo "🔄 Atualizando grub.cfg..."
+    grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+boot_entry() {
+    local NAME=$1
+
+    if command -v bootctl >/dev/null; then
+        boot_entry_systemd "$NAME"
+    elif command -v grub-mkconfig >/dev/null; then
+        boot_entry_grub "$NAME"
+    else
+        echo "❌ Nenhum bootloader compatível detectado (systemd-boot ou GRUB)."
+        exit 1
+    fi
+}
+
+list_snapshots() {
+    echo "📂 Snapshots disponíveis em $SNAPDIR:"
+    if [ ! -d "$SNAPDIR" ]; then
+        echo "   (nenhum snapshot encontrado)"
+        return
+    fi
+    ls -1tr "$SNAPDIR" | sed 's/^/@_/' | nl -w2 -s'. '
+}
+
+delete_snapshot() {
+    local NAME=$1
+    local SNAP="$SNAPDIR/@_${NAME}"
+
+    if [ ! -d "$SNAP" ]; then
+        echo "❌ Snapshot não encontrado: $NAME"
+        exit 1
+    fi
+
+    read -p "⚠️  Tem certeza que deseja deletar o snapshot '$NAME'? [y/N]: " CONF
+    case $CONF in
+        [yY][eE][sS]|[yY])
+            btrfs subvolume delete "$SNAP"
+            echo "✅ Snapshot '$NAME' deletado"
+            ;;
+        *)
+            echo "❌ Operação cancelada"
+            ;;
+    esac
+}
+
+cleanup_snapshots() {
+    local KEEP=$1
+    if [ -z "$KEEP" ] || ! [[ "$KEEP" =~ ^[0-9]+$ ]]; then
+        echo "❌ Especifique o número de snapshots a manter"
+        exit 1
+    fi
+
+    mkdir -p "$SNAPDIR"
+    SNAPLIST=( $(ls -1tr "$SNAPDIR") )
+    NUMSNAPS=${#SNAPLIST[@]}
+
+    if (( NUMSNAPS <= KEEP )); then
+        echo "✅ Snapshots dentro do limite ($NUMSNAPS <= $KEEP)"
+        return
+    fi
+
+    NUMDEL=$(( NUMSNAPS - KEEP ))
+    echo "⚠️  Deletando $NUMDEL snapshots mais antigos..."
+    for (( i=0; i<NUMDEL; i++ )); do
+        btrfs subvolume delete "$SNAPDIR/${SNAPLIST[$i]}"
+        echo "   ✅ Deletado: ${SNAPLIST[$i]}"
+    done
+    echo "✅ Limpeza concluída. Mantidos últimos $KEEP snapshots."
+}
+
+# --- MAIN ---
+[ $# -lt 1 ] && usage
+
+CMD=$1
+NAME=$2
+
+case $CMD in
+    create) [ -z "$NAME" ] && usage; create_snapshot "$NAME" ;;
+    restore) [ -z "$NAME" ] && usage; restore_snapshot "$NAME" ;;
+    boot) [ -z "$NAME" ] && usage; boot_entry "$NAME" ;;
+    list) list_snapshots ;;
+    delete) [ -z "$NAME" ] && usage; delete_snapshot "$NAME" ;;
+    cleanup) [ -z "$NAME" ] && usage; cleanup_snapshots "$NAME" ;;
+    *) usage ;;
+esac
