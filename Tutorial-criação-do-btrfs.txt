@@ -1,0 +1,141 @@
+TUTORIAL COMPLETO DE BTRFS – MONTAGEM E TUNING
+================================================
+
+1. INTRODUÇÃO
+-------------
+Btrfs (B-tree File System) é um sistema de arquivos moderno para Linux que oferece:
+- Copy-on-Write (CoW)
+- Snapshots e subvolumes
+- Compressão transparente
+- Verificação de integridade de dados e metadados
+- RAID nativo e gerenciamento de múltiplos dispositivos
+
+Ele é altamente configurável e suporta várias opções de montagem e tuning para desempenho, integridade e recursos avançados.
+
+2. INSTALAÇÃO
+-------------
+Debian/Ubuntu:
+sudo apt update
+sudo apt install btrfs-progs
+
+Fedora/RHEL:
+sudo dnf install btrfs-progs
+
+Arch Linux:
+sudo pacman -S btrfs-progs
+
+3. CRIAÇÃO DO SISTEMA DE ARQUIVOS
+---------------------------------
+Criar FS simples:
+sudo mkfs.btrfs /dev/sdX
+
+Exemplo RAID1:
+sudo mkfs.btrfs -d raid1 -m raid1 /dev/sdb /dev/sdc
+
+4. MONTAGEM BÁSICA
+------------------
+Montagem simples:
+sudo mount -t btrfs /dev/sdb1 /mnt
+
+Listar dispositivos e subvolumes:
+sudo btrfs filesystem show
+sudo btrfs subvolume list /mnt
+
+5. OPÇÕES DE MONTAGEM
+---------------------
+Btrfs suporta muitas opções de montagem. Principais:
+
+- compress=<algorithm> : ativar compressão
+    Ex.: compress=zstd, compress=lzo, compress=zlib
+- compress-force=<algorithm> : força compressão mesmo em arquivos já comprimidos
+- space_cache / space_cache=v2 : habilita cache de espaço livre (recomendado)
+- autodefrag : fragmentação automática de arquivos
+- noatime : não atualizar timestamps de acesso (melhora performance)
+- nodatacow : desativa CoW para arquivos específicos
+- subvol=<nome> : monta um subvolume específico
+- inode_cache : acelera listagem de arquivos
+- discard : ativar TRIM para SSDs
+- ssd : otimizações para SSDs
+- commit=<N> : frequência de commit em segundos (default 30)
+- degrage / nospace_cache : tuning avançado de espaço
+
+Exemplo completo de montagem:
+sudo mount -o compress=zstd,space_cache=v2,noatime,ssd,subvol=@ /dev/sdb1 /mnt
+
+6. TUNING E OTIMIZAÇÃO
+----------------------
+Btrfs permite ajustes finos via mount ou sysfs:
+
+- Compressão:
+sudo mount -o compress=zstd:3 /dev/sdb1 /mnt
+Níveis de 1 a 22 (zstd) — 1 mais rápido, 22 máxima compressão.
+
+- Commit frequency:
+sudo mount -o commit=10 /dev/sdb1 /mnt
+Define o tempo em segundos entre commits. Menor valor = maior consistência, menor desempenho.
+
+- Autodefrag:
+sudo mount -o autodefrag /dev/sdb1 /mnt
+Fragmentação automática de arquivos pequenos.
+
+- SSD tuning:
+sudo mount -o ssd,discard,space_cache=v2 /dev/sdb1 /mnt
+
+- Desativar CoW (para desempenho de bases de dados ou VM):
+sudo chattr +C /mnt/file_or_dir
+
+- Subvolumes e snapshots:
+Criar subvolume:
+sudo btrfs subvolume create /mnt/@home
+Montar subvolume específico:
+sudo mount -o subvol=@home /dev/sdb1 /mnt/home
+
+- Balanceamento de espaço (quando discos adicionados/removidos):
+sudo btrfs balance start /mnt
+sudo btrfs balance status /mnt
+
+7. GERENCIAMENTO DE RAID
+------------------------
+Adicionar dispositivo:
+sudo btrfs device add /dev/sdc /mnt
+Remover dispositivo:
+sudo btrfs device remove /dev/sdb /mnt
+Checar status:
+sudo btrfs filesystem df /mnt
+sudo btrfs filesystem show
+
+8. MONITORAMENTO E MANUTENÇÃO
+-----------------------------
+- Scrub (verificação de integridade):
+sudo btrfs scrub start /mnt
+sudo btrfs scrub status /mnt
+
+- Check / repair:
+sudo btrfs check /dev/sdb1
+sudo btrfs check --repair /dev/sdb1
+
+- Defragmentar e aplicar compressão em arquivos existentes:
+sudo btrfs filesystem defragment -r -v -czstd /mnt
+
+9. RESUMO DE COMANDOS ÚTEIS
+-----------------------------
+mkfs.btrfs /dev/sdX                     - Criar FS
+mount -t btrfs /dev/sdX /mnt            - Montar
+mount -o compress=zstd,noatime ...      - Montagem avançada com tuning
+btrfs subvolume create /mnt/sub         - Criar subvolume
+btrfs subvolume snapshot /mnt/sub /mnt/sub_snap - Criar snapshot
+btrfs filesystem df /mnt                 - Status de espaço
+btrfs device add/remove ...             - RAID
+btrfs scrub start/status /mnt           - Integridade
+btrfs balance start/status /mnt         - Balanceamento
+btrfs filesystem defragment -czstd /mnt - Defragmentar e comprimir
+
+10. RECOMENDAÇÕES
+-----------------
+- Sempre backup antes de reparos.
+- Use snapshots para segurança antes de atualizações.
+- Compressão zstd: ótimo equilíbrio entre espaço e velocidade.
+- RAID 5/6 experimental: cuidado em produção.
+- tune via opções de montagem e sysfs para SSDs ou workloads específicos.
+
+Fim do tutorial.
